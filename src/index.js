@@ -392,6 +392,9 @@ export default {
         case 'COMMENT_DELETE_FOR_ADMIN':
           res = await commentDeleteForAdmin(event, env)
           break
+        case 'COMMENT_DELETE_FOR_USER': // >= 1.7.x 前端把博主/用户删评论拆到这个事件
+          res = await commentDeleteForUser(event, env)
+          break
         case 'COMMENT_IMPORT_FOR_ADMIN':
           res = await commentImportForAdmin(event)
           break
@@ -676,6 +679,42 @@ async function commentSetForAdmin (event) {
 }
 
 // 管理员删除评论
+// 用户（或博主邮箱）删除自己的评论。1.7.x 前端把删除入口从
+// COMMENT_DELETE_FOR_ADMIN 拆到了这里，语义：评论 uid 与当前访问者一致、
+// 或评论邮箱与 BLOGGER_EMAIL 一致、或当前访问者本身是管理员时允许删除。
+async function commentDeleteForUser (event, env) {
+  const res = {}
+  try {
+    const uid = getUid()
+    const isAdminUser = isAdmin()
+    const comment = await db.commentByIdQuery.bind(event.id).first()
+    if (!comment) throw new Error('评论不存在')
+    const isOwner = comment.uid === uid
+    const isBlogger = config.BLOGGER_EMAIL &&
+      comment.mail && comment.mail.toLowerCase() === String(config.BLOGGER_EMAIL).toLowerCase()
+    if (!isOwner && !isBlogger && !isAdminUser) {
+      res.code = RES_CODE.FAIL
+      res.message = '无法删除他人的评论'
+      return res
+    }
+    // 与 admin 删除一致：清理评论里引用的 R2 图片
+    if (env.R2 && env.R2_PUBLIC_URL && comment.comment) {
+      try {
+        await cleanupR2Images(comment.comment, env.R2, env.R2_PUBLIC_URL)
+      } catch (e) {
+        logger.warn('清理 R2 图片失败：', e.message)
+      }
+    }
+    await db.commentDeleteStmt.bind(event.id).run()
+    res.code = RES_CODE.SUCCESS
+    res.deleted = 1
+  } catch (e) {
+    res.code = RES_CODE.FAIL
+    res.message = e.message
+  }
+  return res
+}
+
 async function commentDeleteForAdmin (event, env) {
   const res = {}
   const isAdminUser = isAdmin()
