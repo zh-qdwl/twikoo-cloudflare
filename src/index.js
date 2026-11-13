@@ -954,6 +954,27 @@ async function postSubmit (comment) {
   const isSpam = await postCheckSpam(comment, config) ?? false
   await saveSpamCheckResult(comment, isSpam)
   // 发送通知
+  // 抓取被评论页面的 <title>，让通知邮件带上文章标题。
+  // twikoo-func 的通知模板只有 SITE_NAME 变量（没有文章标题），
+  // 这里在发通知前把 MAIL_SUBJECT_ADMIN 动态设为 "站点名 · 文章标题"。
+  // 抓不到标题时保持原配置不变，退回默认行为。
+  try {
+    const pageUrl = comment.href || (config.SITE_URL + comment.url)
+    if (pageUrl && /^https?:\/\//.test(pageUrl)) {
+      const resp = await fetch(pageUrl, { redirect: 'follow', signal: AbortSignal.timeout(4000) })
+      if (resp.ok) {
+        const html = await resp.text()
+        const m = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+        if (m && m[1]) {
+          const postTitle = m[1].trim().replace(/\s*[·|\-–—]\s*昊的博客\s*$/, '').trim()
+          const siteName = config.SITE_NAME || '博客'
+          config.MAIL_SUBJECT_ADMIN = `${siteName} · ${postTitle} 有新评论`
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn('抓取文章标题失败，邮件标题退回站点名：', e.message)
+  }
   await sendNotice(comment, config, getParentComment)
   return { code: RES_CODE.SUCCESS }
 }
